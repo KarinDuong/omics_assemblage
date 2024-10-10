@@ -44,7 +44,7 @@ matplotlib.use("Agg")
 __author__ = "Duong Karine"
 __version__ = "1.0.0"
 __maintainer__ = "Duong Karine"
-__email__ = "your@email.fr"
+__email__ = "karine.duong@etu.u-paris.fr"
 __status__ = "Developpement"
 
 
@@ -266,10 +266,28 @@ def solve_entry_tips(graph: DiGraph, starting_nodes: List[str]) -> DiGraph:
     :param starting_nodes: (list) A list of starting nodes
     :return: (nx.DiGraph) A directed graph object
     """
-    
-    
-    pass
+    for node in graph.nodes():
+        start_node_that_have_path_with_this_node = [i for i in starting_nodes if has_path(graph, i, node)] 
+        
+        if len(start_node_that_have_path_with_this_node) > 1:
+            simple_path_exist_with_this_node = []
+            for i in start_node_that_have_path_with_this_node:
+                simple_path_exist_with_this_node = [path for entry in start_node_that_have_path_with_this_node
+                                                    for path in all_simple_paths(graph, entry, node) if len(path)>1]
+            
+            if len(simple_path_exist_with_this_node) > 1:
+                avg_weight_paths = [path_average_weight(graph, path) for path in simple_path_exist_with_this_node]
+                length_path = [len(path) for path in simple_path_exist_with_this_node]
 
+                graph = select_best_path(
+                    graph, simple_path_exist_with_this_node, length_path, avg_weight_paths,
+                    delete_entry_node=True, delete_sink_node=False
+                )
+
+                starting_nodes = get_starting_nodes(graph)
+                return solve_entry_tips(graph, starting_nodes)
+    return graph
+    
 
 def solve_out_tips(graph: DiGraph, ending_nodes: List[str]) -> DiGraph:
     """Remove out tips
@@ -278,7 +296,51 @@ def solve_out_tips(graph: DiGraph, ending_nodes: List[str]) -> DiGraph:
     :param ending_nodes: (list) A list of ending nodes
     :return: (nx.DiGraph) A directed graph object
     """
-    pass
+    for current_node in graph.nodes:
+        # Identifier les successeurs qui mènent aux nœuds de sortie
+        connected_ending_nodes = [
+            successor for successor in graph.successors(current_node)
+            if any(has_path(graph, successor, exit) for exit in ending_nodes) or successor in ending_nodes
+        ]
+
+        # Si plusieurs successeurs mènent à des nœuds de sortie
+        if len(connected_ending_nodes) > 1:
+            potential_paths = []
+
+            # Récupérer les chemins simples entre le nœud actuel et les successeurs
+            for successor in connected_ending_nodes:
+                if successor in ending_nodes:
+                    new_paths = [[current_node, successor]]  # Le successeur est directement un nœud de sortie
+                else:
+                    new_paths = [
+                        path for exit in ending_nodes
+                        for path in all_simple_paths(graph, current_node, exit)
+                        if path[1] == successor  # Vérifier que le successeur est bien sur le chemin
+                    ]
+
+                for path in new_paths:
+                    if len(path) > 1:  # Ignorer les chemins directs ou de longueur 1
+                        potential_paths.append(path)
+
+            # Si plusieurs chemins sont possibles, on simplifie en sélectionnant le meilleur
+            if len(potential_paths) > 1:
+                # Calculer les poids et les longueurs des chemins
+                average_weights = [path_average_weight(graph, path) for path in potential_paths]
+                path_lengths = [len(path) for path in potential_paths]
+
+                # Sélectionner le meilleur chemin et éliminer les autres
+                graph = select_best_path(
+                    graph, potential_paths, path_lengths, average_weights,
+                    delete_entry_node=False, delete_sink_node=True
+                )
+
+                # Mettre à jour la liste des nœuds de sortie après simplification
+                ending_nodes = get_sink_nodes(graph)
+
+                # Répéter le processus récursivement
+                return solve_out_tips(graph, ending_nodes)
+
+    return graph
 
 
 def get_starting_nodes(graph: DiGraph) -> List[str]:
@@ -329,7 +391,6 @@ def get_contigs(
                     contig = path[0]
                     for node in path[1:]:
                         contig += node[-1]
-                        print(type(contig))
                     list_contig.append((contig, len(contig)))
     return list_contig
 
@@ -381,7 +442,36 @@ def main() -> None:  # pragma: no cover
     # Get arguments
     args = get_arguments()
 
-    # Fonctions de dessin du graphe
+    # Lecture du fichier et construction du graph
+    kmer_dictionnary = build_kmer_dict(args.fastq_file, args.kmer_size)
+    graph = build_graph(kmer_dictionnary)
+    
+    # Résolution des bulles
+    graph = simplify_bubbles(graph)
+    
+    # Résolution des pointes d’entrée et de sortie
+    starting_nodes = get_starting_nodes(graph)
+    graph = solve_entry_tips(graph, starting_nodes)
+    
+    ending_nodes = get_sink_nodes(graph)
+    graph = solve_out_tips(graph, ending_nodes)
+    
+    # Ecriture du/des contigs 
+    starting_nodes = get_starting_nodes(graph)
+    ending_nodes = get_sink_nodes(graph)
+    contigs = get_contigs(graph, starting_nodes, ending_nodes)
+    
+    save_contigs(contigs, args.output_file)
+    
+    # Resultat BLAST:
+    # > makeblastdb -in data/eva71.fna -dbtype nucl
+    # > blastn -query result/output.fasta -db data/eva71.fna
+    #     Score = 13649 bits (7391),  Expect = 0.0
+    #     Identities = 7391/7391 (100%), Gaps = 0/7391 (0%)
+    #     Strand=Plus/Plus
+
+
+    # Fonctions de dessin du graphe    
     # A decommenter si vous souhaitez visualiser un petit
     # graphe
     # Plot the graph
